@@ -1,5 +1,4 @@
 // =============================== CONFIGURATION ===============================
-
 const CFG = {
     maxDt: 0.1,
     shootPower: 15,
@@ -36,16 +35,32 @@ const COLORS = {
 };
 
 // ============================== UTILITY FUNCTIONS ==============================
+const TAU = Math.PI * 2;
+const { atan2, hypot, floor, ceil, round, random, abs, min, max } = Math;
 
-const dist = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
-const angle = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
-const rand = (min, max) => min + Math.random() * (max - min);
-const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const dist = (a, b) => hypot(b.x - a.x, b.y - a.y);
+const angle = (a, b) => atan2(b.y - a.y, b.x - a.x);
+const rand = (lo, hi) => lo + random() * (hi - lo);
+const pick = (arr) => arr[(random() * arr.length) | 0];
+const font = (size) => `${size}px "Pixelify Local"`;
 const hitTest = (x, y, bx, by, bw, bh) =>
     x >= bx && x <= bx + bw && y >= by && y <= by + bh;
+const cloneObs = (arr) => arr.map((o) => ({ x: o.x, y: o.y, img: o.img }));
+
+function makeBullet(x, y, nx, ny, speed, range, isEnemy) {
+    return {
+        x,
+        y,
+        vx: nx * speed,
+        vy: ny * speed,
+        range,
+        sx: x,
+        sy: y,
+        isEnemy,
+    };
+}
 
 // =================================== ASSETS ===================================
-
 const Assets = {
     grass1: null,
     grass2: null,
@@ -61,6 +76,7 @@ const Assets = {
         action: null,
         shotPool: [],
         shotIndex: 0,
+        volume: 0.5,
     },
 
     async load() {
@@ -80,15 +96,17 @@ const Assets = {
             this.blood,
             this.player,
             this.enemy,
-        ] = await Promise.all([
-            loadImg("assets/img/grass1.png"),
-            loadImg("assets/img/grass2.png"),
-            loadImg("assets/img/water.png"),
-            loadImg("assets/img/sand.png"),
-            loadImg("assets/img/blood.png"),
-            loadImg("assets/img/player.png"),
-            loadImg("assets/img/enemy.png"),
-        ]);
+        ] = await Promise.all(
+            [
+                "grass1",
+                "grass2",
+                "water",
+                "sand",
+                "blood",
+                "player",
+                "enemy",
+            ].map((n) => loadImg(`assets/img/${n}.png`)),
+        );
 
         this.obstacles = await Promise.all(
             Array.from({ length: 9 }, (_, i) =>
@@ -96,52 +114,60 @@ const Assets = {
             ),
         );
 
-        this.sfx.death = new Audio("assets/fx/death.wav");
-        this.sfx.startlevel = new Audio("assets/fx/startlevel.wav");
-        this.sfx.action = new Audio("assets/fx/action.wav");
+        const sfx = this.sfx;
+        sfx.death = new Audio("assets/fx/death.wav");
+        sfx.startlevel = new Audio("assets/fx/startlevel.wav");
+        sfx.action = new Audio("assets/fx/action.wav");
 
         for (let i = 0; i < 3; i++) {
             const audio = new Audio("assets/fx/shot.wav");
             audio.load();
-            this.sfx.shotPool.push(audio);
+            sfx.shotPool.push(audio);
         }
 
-        this.sfx.death.load();
-        this.sfx.startlevel.load();
-        this.sfx.action.load();
+        sfx.death.load();
+        sfx.startlevel.load();
+        sfx.action.load();
+
+        sfx.death.volume = this.sfx.volume;
+        sfx.startlevel.volume = this.sfx.volume;
+        sfx.action.volume = this.sfx.volume;
+
+        for (let i = 0; i < sfx.shotPool.length; i++) {
+            sfx.shotPool[i].volume = this.sfx.volume;
+        }
     },
 
     playSound(sound) {
+        const sfx = this.sfx;
         if (sound === "shot") {
-            const audio = this.sfx.shotPool[this.sfx.shotIndex];
+            const audio = sfx.shotPool[sfx.shotIndex];
             audio.currentTime = 0;
             audio.play().catch(() => {});
-            this.sfx.shotIndex = (this.sfx.shotIndex + 1) % 3;
-        } else if (this.sfx[sound]) {
-            this.sfx[sound].currentTime = 0;
-            this.sfx[sound].play().catch(() => {});
+            sfx.shotIndex = (sfx.shotIndex + 1) % 3;
+        } else if (sfx[sound]) {
+            sfx[sound].currentTime = 0;
+            sfx[sound].play().catch(() => {});
         }
     },
 };
 
 // ==================================== MAP ====================================
-
 const Map = {
     data: null,
     width: 30,
     height: 15,
+    hw: 15,
+    hh: 7.5,
     cache: null,
     obstacles: [],
     waterCache: null,
     bloodSpots: [],
     spawnCache: null,
     currentMapNum: null,
-    savedObstacles: null,
 
     async load(mapNum = null) {
-        if (mapNum === null) {
-            mapNum = Math.floor(Math.random() * 10);
-        }
+        if (mapNum === null) mapNum = (random() * 10) | 0;
         this.currentMapNum = mapNum;
         const res = await fetch(`assets/maps/map${mapNum}.json`);
         this.data = (await res.json()).map;
@@ -154,13 +180,13 @@ const Map = {
     },
 
     generateObstacles() {
-        const hw = this.width / 2;
-        const hh = this.height / 2;
+        const { hw, hh, width, height, data } = this;
         this.obstacles = [];
 
-        for (let y = 0; y < this.height; y++) {
-            for (let x = 0; x < this.width; x++) {
-                if (this.data[y][x] === 3) {
+        for (let y = 0; y < height; y++) {
+            const row = data[y];
+            for (let x = 0; x < width; x++) {
+                if (row[x] === 3) {
                     this.obstacles.push({
                         x: x - hw + 0.5,
                         y: y - hh + 0.5,
@@ -172,12 +198,11 @@ const Map = {
     },
 
     cacheSpawnPoints() {
-        const hw = this.width / 2;
-        const hh = this.height / 2;
+        const { hw, hh, width, height } = this;
         this.spawnCache = [];
 
-        for (let y = 0; y < this.height; y++) {
-            for (let x = 0; x < this.width; x++) {
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
                 const wx = x - hw + 0.5;
                 const wy = y - hh + 0.5;
                 if (this.canFit(wx, wy)) {
@@ -188,52 +213,49 @@ const Map = {
     },
 
     randomSpawn() {
-        return this.spawnCache && this.spawnCache.length > 0
-            ? pick(this.spawnCache)
-            : { x: 0, y: 0 };
+        const sc = this.spawnCache;
+        return sc && sc.length > 0 ? pick(sc) : { x: 0, y: 0 };
     },
 
     addBlood(x, y) {
         if (!this.cache) return;
-
         this.bloodSpots.push({ x, y });
 
-        const hw = this.width / 2;
-        const hh = this.height / 2;
-        const tileSize = Math.round(this.cache.width / this.width);
-        const bx = Math.round((x + hw - 0.5) * tileSize);
-        const by = Math.round((y + hh - 0.5) * tileSize);
+        const tileSize = round(this.cache.width / this.width);
+        const bx = round((x + this.hw - 0.5) * tileSize);
+        const by = round((y + this.hh - 0.5) * tileSize);
 
-        const ctx = this.cache.getContext("2d");
         if (Assets.blood) {
-            ctx.drawImage(Assets.blood, bx, by, tileSize, tileSize);
+            this.cache
+                .getContext("2d")
+                .drawImage(Assets.blood, bx, by, tileSize, tileSize);
         }
     },
 
     renderWaterCache(w, h, tileSize, ox, oy) {
         if (!Assets.water) return;
-        tileSize = Math.round(tileSize);
+        tileSize = round(tileSize);
         this.waterCache = document.createElement("canvas");
         this.waterCache.width = w;
         this.waterCache.height = h;
         const ctx = this.waterCache.getContext("2d");
         ctx.imageSmoothingEnabled = false;
 
-        const mapPxW = this.width * tileSize;
-        const mapPxH = this.height * tileSize;
-        const mapX = Math.round(ox - mapPxW / 2);
-        const mapY = Math.round(oy - mapPxH / 2);
+        const mapX = round(ox - (this.width * tileSize) / 2);
+        const mapY = round(oy - (this.height * tileSize) / 2);
         const startX = (mapX % tileSize) - tileSize;
         const startY = (mapY % tileSize) - tileSize;
-        const tilesX = Math.ceil(w / tileSize) + 2;
-        const tilesY = Math.ceil(h / tileSize) + 2;
+        const tilesX = ceil(w / tileSize) + 2;
+        const tilesY = ceil(h / tileSize) + 2;
+        const waterImg = Assets.water;
 
         for (let y = 0; y < tilesY; y++) {
+            const py = startY + y * tileSize;
             for (let x = 0; x < tilesX; x++) {
                 ctx.drawImage(
-                    Assets.water,
+                    waterImg,
                     startX + x * tileSize,
-                    startY + y * tileSize,
+                    py,
                     tileSize,
                     tileSize,
                 );
@@ -242,11 +264,10 @@ const Map = {
     },
 
     renderCache(tileSize) {
-        tileSize = Math.round(tileSize);
-        const pxW = this.width * tileSize;
-        const pxH = this.height * tileSize;
-        const hw = this.width / 2;
-        const hh = this.height / 2;
+        tileSize = round(tileSize);
+        const { width, height, hw, hh, data, bloodSpots, obstacles } = this;
+        const pxW = width * tileSize;
+        const pxH = height * tileSize;
 
         this.cache = document.createElement("canvas");
         this.cache.width = pxW;
@@ -254,89 +275,76 @@ const Map = {
         const ctx = this.cache.getContext("2d");
         ctx.imageSmoothingEnabled = false;
 
-        for (let y = 0; y < this.height; y++) {
-            for (let x = 0; x < this.width; x++) {
-                const tile = this.data[y][x];
-                const useGrass2 = (x + y) % 4 < 1;
+        const { grass1, grass2, water, sand, blood } = Assets;
 
-                if (tile === 0 && Assets.water) {
-                    ctx.drawImage(
-                        Assets.water,
-                        x * tileSize,
-                        y * tileSize,
-                        tileSize,
-                        tileSize,
-                    );
-                } else if (
-                    (tile === 1 || tile === 2 || tile === 3) &&
-                    Assets.grass1
-                ) {
-                    const grass = useGrass2 ? Assets.grass2 : Assets.grass1;
-                    ctx.drawImage(
-                        grass,
-                        x * tileSize,
-                        y * tileSize,
-                        tileSize,
-                        tileSize,
-                    );
-                }
-            }
-        }
+        for (let y = 0; y < height; y++) {
+            const row = data[y];
+            const py = y * tileSize;
+            for (let x = 0; x < width; x++) {
+                const tile = row[x];
+                const px = x * tileSize;
 
-        if (Assets.sand) {
-            for (let y = 0; y < this.height; y++) {
-                for (let x = 0; x < this.width; x++) {
-                    if (this.data[y][x] === 2) {
-                        ctx.drawImage(
-                            Assets.sand,
-                            x * tileSize,
-                            y * tileSize,
-                            tileSize,
-                            tileSize,
-                        );
+                if (tile === 0) {
+                    if (water) ctx.drawImage(water, px, py, tileSize, tileSize);
+                } else if (tile >= 1 && tile <= 3) {
+                    if (grass1) {
+                        const grass = (x + y) % 4 < 1 ? grass2 : grass1;
+                        ctx.drawImage(grass, px, py, tileSize, tileSize);
+                    }
+                    if (tile === 2 && sand) {
+                        ctx.drawImage(sand, px, py, tileSize, tileSize);
                     }
                 }
             }
         }
 
-        for (const spot of this.bloodSpots) {
-            const bx = Math.round((spot.x + hw - 0.5) * tileSize);
-            const by = Math.round((spot.y + hh - 0.5) * tileSize);
-            if (Assets.blood) {
-                ctx.drawImage(Assets.blood, bx, by, tileSize, tileSize);
+        if (blood) {
+            for (let i = 0; i < bloodSpots.length; i++) {
+                const spot = bloodSpots[i];
+                ctx.drawImage(
+                    blood,
+                    round((spot.x + hw - 0.5) * tileSize),
+                    round((spot.y + hh - 0.5) * tileSize),
+                    tileSize,
+                    tileSize,
+                );
             }
         }
 
-        for (const obstacle of this.obstacles) {
-            const ox = Math.round((obstacle.x + hw - 0.5) * tileSize);
-            const oy = Math.round((obstacle.y + hh - 0.5) * tileSize);
-            if (obstacle.img) {
-                ctx.drawImage(obstacle.img, ox, oy, tileSize, tileSize);
+        for (let i = 0; i < obstacles.length; i++) {
+            const o = obstacles[i];
+            if (o.img) {
+                ctx.drawImage(
+                    o.img,
+                    round((o.x + hw - 0.5) * tileSize),
+                    round((o.y + hh - 0.5) * tileSize),
+                    tileSize,
+                    tileSize,
+                );
             }
         }
     },
 
     canFit(x, y, radius = CFG.collisionRadius) {
-        const hw = this.width / 2;
-        const hh = this.height / 2;
-        const x0 = Math.floor(x - radius + hw);
-        const x1 = Math.floor(x + radius + hw);
-        const y0 = Math.floor(y - radius + hh);
-        const y1 = Math.floor(y + radius + hh);
+        const { hw, hh, width, height, data, obstacles } = this;
+        const x0 = floor(x - radius + hw);
+        const x1 = floor(x + radius + hw);
+        const y0 = floor(y - radius + hh);
+        const y1 = floor(y + radius + hh);
 
         for (let gy = y0; gy <= y1; gy++) {
             for (let gx = x0; gx <= x1; gx++) {
-                if (gx < 0 || gx >= this.width || gy < 0 || gy >= this.height)
+                if (gx < 0 || gx >= width || gy < 0 || gy >= height)
                     return false;
-                const tile = this.data[gy][gx];
-                if (tile !== 1 && tile !== 2 && tile !== 3) return false;
+                const tile = data[gy][gx];
+                if (tile < 1 || tile > 3) return false;
             }
         }
 
-        for (const obstacle of this.obstacles) {
-            const hs = CFG.obstacleCollisionHalf + radius;
-            if (Math.abs(x - obstacle.x) < hs && Math.abs(y - obstacle.y) < hs)
-                return false;
+        const hs = CFG.obstacleCollisionHalf + radius;
+        for (let i = 0; i < obstacles.length; i++) {
+            const o = obstacles[i];
+            if (abs(x - o.x) < hs && abs(y - o.y) < hs) return false;
         }
 
         return true;
@@ -344,14 +352,16 @@ const Map = {
 
     hitsObstacle(x, y) {
         const h = CFG.obstacleHalfSize;
-        return this.obstacles.some(
-            (o) => Math.abs(x - o.x) < h && Math.abs(y - o.y) < h,
-        );
+        const obs = this.obstacles;
+        for (let i = 0; i < obs.length; i++) {
+            const o = obs[i];
+            if (abs(x - o.x) < h && abs(y - o.y) < h) return true;
+        }
+        return false;
     },
 };
 
 // ==================================== GAME ====================================
-
 const Game = {
     canvas: null,
     ctx: null,
@@ -379,30 +389,17 @@ const Game = {
     },
 
     async loadHomeMap() {
-        this.homeMapNum = Math.floor(Math.random() * 10);
-        const res = await fetch(`assets/maps/map${this.homeMapNum}.json`);
-        Map.data = (await res.json()).map;
-        Map.currentMapNum = this.homeMapNum;
-        Map.cache = null;
-        Map.waterCache = null;
-        Map.bloodSpots = [];
-        Map.generateObstacles();
-        this.homeObstacles = Map.obstacles.map((obs) => ({
-            x: obs.x,
-            y: obs.y,
-            img: obs.img,
-        }));
-        Map.cacheSpawnPoints();
+        this.homeMapNum = (random() * 10) | 0;
+        await Map.load(this.homeMapNum);
+        this.homeObstacles = cloneObs(Map.obstacles);
         this.resize();
     },
 
     setupEvents() {
         const pointer = (x, y, type) => {
             if (type !== "end") {
-                this.mouse = {
-                    x: (x - this.world.ox) / this.world.scale,
-                    y: (y - this.world.oy) / this.world.scale,
-                };
+                this.mouse.x = (x - this.world.ox) / this.world.scale;
+                this.mouse.y = (y - this.world.oy) / this.world.scale;
             }
             if (type === "start") this.handleClick(x, y);
             else if (type === "end") this.shooting = false;
@@ -437,25 +434,20 @@ const Game = {
         this.canvas.addEventListener("touchend", () => pointer(0, 0, "end"));
 
         addEventListener("keydown", (e) => {
+            const k = e.key.toLowerCase();
             if (
-                (e.key === "p" || e.key === "P") &&
+                k === "p" &&
                 (this.state === "PLAYING" || this.state === "PAUSED")
             ) {
                 this.togglePause();
             }
-            if (e.key === "f" || e.key === "F") {
-                Assets.playSound("action");
-                if (document.fullscreenElement) document.exitFullscreen();
-                else document.documentElement.requestFullscreen();
-            }
+            if (k === "f") this.toggleFullscreen();
         });
 
         addEventListener("resize", () => this.resize());
-
-        document.addEventListener("fullscreenchange", () => {
-            Assets.playSound("action");
-        });
-
+        document.addEventListener("fullscreenchange", () =>
+            Assets.playSound("action"),
+        );
         document.addEventListener("visibilitychange", () => {
             if (document.hidden && this.state === "PLAYING") {
                 this.state = "PAUSED";
@@ -465,29 +457,29 @@ const Game = {
     },
 
     handleClick(x, y) {
+        const { w, h, scale } = this.world;
         const s = CFG.pauseSize;
         const m = CFG.pauseMargin;
+        const btnRight = w - s - m;
 
-        if (hitTest(x, y, this.world.w - s - m, m, s, s)) {
-            Assets.playSound("action");
-            if (document.fullscreenElement) document.exitFullscreen();
-            else document.documentElement.requestFullscreen();
+        if (hitTest(x, y, btnRight, m, s, s)) {
+            this.toggleFullscreen();
             return;
         }
 
         if (
             this.state === "PLAYING" &&
-            hitTest(x, y, this.world.w - s - m, m + s + m, s, s)
+            hitTest(x, y, btnRight, m + s + m, s, s)
         ) {
             this.togglePause();
             return;
         }
 
         if (this.state === "PAUSED") {
-            const btnW = this.world.scale * 3;
-            const btnH = this.world.scale * 0.9;
-            const btnX = this.world.w / 2 - btnW / 2;
-            const btnY = this.world.h / 2 + this.world.scale * 2.5;
+            const btnW = scale * 3;
+            const btnH = scale * 0.9;
+            const btnX = w / 2 - btnW / 2;
+            const btnY = h / 2 + scale * 2.5;
             if (hitTest(x, y, btnX, btnY, btnW, btnH)) {
                 this.state = "MENU";
                 Assets.playSound("action");
@@ -513,51 +505,46 @@ const Game = {
         if (this.state === "PLAYING") {
             this.state = "PAUSED";
             this.shooting = false;
-            Assets.playSound("action");
         } else if (this.state === "PAUSED") {
             this.state = "PLAYING";
             this.lastTime = performance.now();
-            Assets.playSound("action");
         }
+        Assets.playSound("action");
+    },
+
+    toggleFullscreen() {
+        Assets.playSound("action");
+        if (document.fullscreenElement) document.exitFullscreen();
+        else document.documentElement.requestFullscreen();
     },
 
     resize() {
         const dpr = devicePixelRatio || 1;
-        this.world.w = innerWidth;
-        this.world.h = innerHeight;
-        this.canvas.width = this.world.w * dpr;
-        this.canvas.height = this.world.h * dpr;
-        this.canvas.style.width = this.world.w + "px";
-        this.canvas.style.height = this.world.h + "px";
+        const w = this.world;
+        w.w = innerWidth;
+        w.h = innerHeight;
+        this.canvas.width = w.w * dpr;
+        this.canvas.height = w.h * dpr;
+        this.canvas.style.width = w.w + "px";
+        this.canvas.style.height = w.h + "px";
 
         this.ctx.scale(dpr, dpr);
         this.ctx.imageSmoothingEnabled = false;
-        this.world.scale =
-            Math.min(this.world.w / Map.width, this.world.h / Map.height) *
-            CFG.mapScale;
-        this.world.ox = this.world.w / 2;
-        this.world.oy = this.world.h / 2;
+        w.scale = min(w.w / Map.width, w.h / Map.height) * CFG.mapScale;
+        w.ox = w.w / 2;
+        w.oy = w.h / 2;
 
-        Map.renderWaterCache(
-            this.world.w,
-            this.world.h,
-            this.world.scale,
-            this.world.ox,
-            this.world.oy,
-        );
-        if (Map.data) Map.renderCache(this.world.scale);
+        Map.renderWaterCache(w.w, w.h, w.scale, w.ox, w.oy);
+        if (Map.data) Map.renderCache(w.scale);
     },
 
     async initLevel(lvl) {
         this.level = lvl;
+
         if (lvl === 1 && this.homeMapNum !== null) {
             await Map.load(this.homeMapNum);
             if (this.homeObstacles) {
-                Map.obstacles = this.homeObstacles.map((obs) => ({
-                    x: obs.x,
-                    y: obs.y,
-                    img: obs.img,
-                }));
+                Map.obstacles = cloneObs(this.homeObstacles);
             }
         } else {
             await Map.load();
@@ -568,7 +555,7 @@ const Game = {
         this.enemies = [];
         this.bullets = [];
 
-        const count = Math.min(lvl, CFG.maxEnemies);
+        const count = min(lvl, CFG.maxEnemies);
         for (let i = 0; i < count; i++) {
             let pos;
             do {
@@ -578,7 +565,7 @@ const Game = {
             this.enemies.push({
                 x: pos.x,
                 y: pos.y,
-                angle: Math.random() * Math.PI * 2,
+                angle: random() * TAU,
                 nextShot: 0,
             });
         }
@@ -593,19 +580,20 @@ const Game = {
     },
 
     update(dt, now) {
-        if (this.state === "COUNTDOWN") {
+        const state = this.state;
+
+        if (state === "COUNTDOWN") {
             if (now - this.timer > CFG.countdownDur) {
+                this.state = "READY";
                 this.initLevel(this.level + 1);
             }
             this.updateBullets(dt);
             return;
         }
 
-        if (this.state === "READY") {
-            return;
-        }
+        if (state === "READY") return;
 
-        if (this.state === "LOST") {
+        if (state === "LOST") {
             if (now - this.timer > CFG.countdownDur) {
                 this.state = "MENU";
                 this.loadHomeMap();
@@ -614,7 +602,7 @@ const Game = {
             return;
         }
 
-        if (this.state !== "PLAYING") return;
+        if (state !== "PLAYING") return;
 
         this.updatePlayer(dt, now);
         this.updateEnemies(now);
@@ -623,121 +611,121 @@ const Game = {
     },
 
     updatePlayer(dt, now) {
-        const player = this.player;
+        const p = this.player;
 
         if (this.shooting && now - this.lastShot >= CFG.cooldown) {
-            const dx = this.mouse.x - player.x;
-            const dy = this.mouse.y - player.y;
-            const len = Math.hypot(dx, dy);
+            const dx = this.mouse.x - p.x;
+            const dy = this.mouse.y - p.y;
+            const len = hypot(dx, dy);
 
             if (len > 0.1) {
                 const nx = dx / len;
                 const ny = dy / len;
 
-                this.bullets.push({
-                    x: player.x,
-                    y: player.y,
-                    vx: nx * CFG.bulletSpeed,
-                    vy: ny * CFG.bulletSpeed,
-                    range: CFG.playerRange,
-                    sx: player.x,
-                    sy: player.y,
-                    isEnemy: false,
-                });
+                this.bullets.push(
+                    makeBullet(
+                        p.x,
+                        p.y,
+                        nx,
+                        ny,
+                        CFG.bulletSpeed,
+                        CFG.playerRange,
+                        false,
+                    ),
+                );
 
-                player.vx -= nx * CFG.shootPower;
-                player.vy -= ny * CFG.shootPower;
+                p.vx -= nx * CFG.shootPower;
+                p.vy -= ny * CFG.shootPower;
                 this.lastShot = now;
                 Assets.playSound("shot");
             }
         }
 
-        const nx = player.x + player.vx * dt;
-        const ny = player.y + player.vy * dt;
-        if (Map.canFit(nx, player.y)) player.x = nx;
-        if (Map.canFit(player.x, ny)) player.y = ny;
+        const nx = p.x + p.vx * dt;
+        const ny = p.y + p.vy * dt;
+        if (Map.canFit(nx, p.y)) p.x = nx;
+        if (Map.canFit(p.x, ny)) p.y = ny;
 
         const friction = CFG.friction ** (dt * 60);
-        player.vx *= friction;
-        player.vy *= friction;
-        player.angle = angle(player, this.mouse);
+        p.vx *= friction;
+        p.vy *= friction;
+        p.angle = angle(p, this.mouse);
     },
 
     updateEnemies(now) {
         const player = this.player;
+        const enemies = this.enemies;
 
-        for (const enemy of this.enemies) {
-            const distance = dist(enemy, player);
+        for (let i = 0; i < enemies.length; i++) {
+            const e = enemies[i];
+            const distance = dist(e, player);
             const inRange = distance <= CFG.enemyRange;
 
             if (inRange) {
-                if (!enemy.lastInRange) {
-                    enemy.nextShot =
+                if (!e.lastInRange) {
+                    e.nextShot =
                         now + rand(CFG.enemyShootMin, CFG.enemyShootMax);
                 }
 
-                enemy.angle = angle(enemy, player);
+                e.angle = angle(e, player);
 
-                if (now > enemy.nextShot) {
-                    const dx = player.x - enemy.x;
-                    const dy = player.y - enemy.y;
-                    const len = Math.hypot(dx, dy);
+                if (now > e.nextShot) {
+                    const dx = player.x - e.x;
+                    const dy = player.y - e.y;
+                    const len = hypot(dx, dy);
 
                     if (len > 0.1) {
-                        const nx = dx / len;
-                        const ny = dy / len;
-                        const extra = Math.max(0, this.level - CFG.maxEnemies);
+                        const extra = max(0, this.level - CFG.maxEnemies);
                         const speed = CFG.bulletSpeed * (1 + extra * 0.05);
 
-                        this.bullets.push({
-                            x: enemy.x,
-                            y: enemy.y,
-                            vx: nx * speed,
-                            vy: ny * speed,
-                            range: CFG.enemyRange,
-                            sx: enemy.x,
-                            sy: enemy.y,
-                            isEnemy: true,
-                        });
+                        this.bullets.push(
+                            makeBullet(
+                                e.x,
+                                e.y,
+                                dx / len,
+                                dy / len,
+                                speed,
+                                CFG.enemyRange,
+                                true,
+                            ),
+                        );
                     }
 
-                    enemy.nextShot =
+                    e.nextShot =
                         now + rand(CFG.enemyShootMin, CFG.enemyShootMax);
                     Assets.playSound("shot");
                 }
             }
 
-            enemy.lastInRange = inRange;
+            e.lastInRange = inRange;
         }
     },
 
     updateBullets(dt) {
-        for (const bullet of this.bullets) {
-            bullet.x += bullet.vx * dt;
-            bullet.y += bullet.vy * dt;
+        const bullets = this.bullets;
+        for (let i = 0; i < bullets.length; i++) {
+            const b = bullets[i];
+            b.x += b.vx * dt;
+            b.y += b.vy * dt;
         }
     },
 
     checkCollisions(now) {
         const player = this.player;
-        const alive = [];
+        const bullets = this.bullets;
+        const enemies = this.enemies;
+        let write = 0;
 
-        for (const bullet of this.bullets) {
-            if (
-                Math.hypot(bullet.x - bullet.sx, bullet.y - bullet.sy) >
-                bullet.range
-            ) {
-                continue;
-            }
+        for (let i = 0; i < bullets.length; i++) {
+            const b = bullets[i];
 
-            if (Map.hitsObstacle(bullet.x, bullet.y)) {
-                continue;
-            }
+            if (hypot(b.x - b.sx, b.y - b.sy) > b.range) continue;
+            if (Map.hitsObstacle(b.x, b.y)) continue;
 
             let hit = false;
 
-            if (bullet.isEnemy) {
-                if (dist(bullet, player) < CFG.playerHitbox) {
+            if (b.isEnemy) {
+                if (hypot(b.x - player.x, b.y - player.y) < CFG.playerHitbox) {
                     Map.addBlood(player.x, player.y);
                     this.state = "LOST";
                     this.timer = now;
@@ -745,14 +733,15 @@ const Game = {
                     Assets.playSound("death");
                 }
             } else {
-                for (let i = 0; i < this.enemies.length; i++) {
-                    if (dist(bullet, this.enemies[i]) < CFG.enemyHitbox) {
-                        Map.addBlood(this.enemies[i].x, this.enemies[i].y);
-                        this.enemies.splice(i, 1);
+                for (let j = 0; j < enemies.length; j++) {
+                    const e = enemies[j];
+                    if (hypot(b.x - e.x, b.y - e.y) < CFG.enemyHitbox) {
+                        Map.addBlood(e.x, e.y);
+                        enemies.splice(j, 1);
                         hit = true;
                         Assets.playSound("death");
 
-                        if (this.enemies.length === 0) {
+                        if (enemies.length === 0) {
                             if (this.level > this.best) {
                                 this.best = this.level;
                                 localStorage.setItem("best", this.best);
@@ -765,241 +754,213 @@ const Game = {
                 }
             }
 
-            if (!hit) alive.push(bullet);
+            if (!hit) bullets[write++] = b;
         }
 
-        this.bullets = alive;
-    },
-
-    toScreen(x, y) {
-        return {
-            x: this.world.ox + x * this.world.scale,
-            y: this.world.oy + y * this.world.scale,
-        };
+        bullets.length = write;
     },
 
     drawEntity(entity, isPlayer) {
-        const screen = this.toScreen(entity.x, entity.y);
-        const radius = Math.round(this.world.scale * CFG.drawRadius);
+        const { ox, oy, scale } = this.world;
+        const sx = round(ox + entity.x * scale);
+        const sy = round(oy + entity.y * scale);
+        const radius = round(scale * CFG.drawRadius);
         const img = isPlayer ? Assets.player : Assets.enemy;
 
         if (img) {
-            this.ctx.save();
-            this.ctx.translate(Math.round(screen.x), Math.round(screen.y));
-            this.ctx.rotate(entity.angle);
-            this.ctx.drawImage(img, -radius, -radius, radius * 2, radius * 2);
-            this.ctx.restore();
+            const ctx = this.ctx;
+            ctx.save();
+            ctx.translate(sx, sy);
+            ctx.rotate(entity.angle);
+            ctx.drawImage(img, -radius, -radius, radius * 2, radius * 2);
+            ctx.restore();
         }
     },
 
     drawBullet(bullet) {
-        const screen = this.toScreen(bullet.x, bullet.y);
-        const radius = Math.round(this.world.scale * CFG.bulletRadius);
-        const color = bullet.isEnemy ? COLORS.bulletEnemy : COLORS.bulletPlayer;
+        const { ox, oy, scale } = this.world;
+        const sx = round(ox + bullet.x * scale);
+        const sy = round(oy + bullet.y * scale);
+        const radius = round(scale * CFG.bulletRadius);
+        const ctx = this.ctx;
 
-        this.ctx.beginPath();
-        this.ctx.arc(
-            Math.round(screen.x),
-            Math.round(screen.y),
-            radius,
-            0,
-            Math.PI * 2,
-        );
-        this.ctx.fillStyle = color;
-        this.ctx.fill();
-        this.ctx.strokeStyle = "#000";
-        this.ctx.lineWidth = 1;
-        this.ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(sx, sy, radius, 0, TAU);
+        ctx.fillStyle = bullet.isEnemy
+            ? COLORS.bulletEnemy
+            : COLORS.bulletPlayer;
+        ctx.fill();
+        ctx.strokeStyle = "#000";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+    },
+
+    drawFullscreenIcon(x1, y1, s) {
+        const ctx = this.ctx;
+        const p = s * 0.25;
+        const c = s * 0.3;
+
+        ctx.fillStyle = COLORS.pauseBtn;
+        ctx.fillRect(x1, y1, s, s);
+        ctx.strokeStyle = COLORS.text;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x1 + p, y1 + p + c);
+        ctx.lineTo(x1 + p, y1 + p);
+        ctx.lineTo(x1 + p + c, y1 + p);
+        ctx.moveTo(x1 + s - p - c, y1 + p);
+        ctx.lineTo(x1 + s - p, y1 + p);
+        ctx.lineTo(x1 + s - p, y1 + p + c);
+        ctx.moveTo(x1 + s - p, y1 + s - p - c);
+        ctx.lineTo(x1 + s - p, y1 + s - p);
+        ctx.lineTo(x1 + s - p - c, y1 + s - p);
+        ctx.moveTo(x1 + p + c, y1 + s - p);
+        ctx.lineTo(x1 + p, y1 + s - p);
+        ctx.lineTo(x1 + p, y1 + s - p - c);
+        ctx.stroke();
     },
 
     drawUI() {
+        const ctx = this.ctx;
         const s = CFG.pauseSize;
         const m = CFG.pauseMargin;
         const x1 = this.world.w - s - m;
-        const y1 = m;
         const y2 = m + s + m;
 
-        this.ctx.fillStyle = COLORS.pauseBtn;
-        this.ctx.fillRect(x1, y1, s, s);
-        this.ctx.fillRect(x1, y2, s, s);
+        this.drawFullscreenIcon(x1, m, s);
 
-        this.ctx.strokeStyle = COLORS.text;
-        this.ctx.lineWidth = 2;
-        const p = s * 0.25;
-        const c = s * 0.3;
-        this.ctx.beginPath();
-        this.ctx.moveTo(x1 + p, y1 + p + c);
-        this.ctx.lineTo(x1 + p, y1 + p);
-        this.ctx.lineTo(x1 + p + c, y1 + p);
-        this.ctx.moveTo(x1 + s - p - c, y1 + p);
-        this.ctx.lineTo(x1 + s - p, y1 + p);
-        this.ctx.lineTo(x1 + s - p, y1 + p + c);
-        this.ctx.moveTo(x1 + s - p, y1 + s - p - c);
-        this.ctx.lineTo(x1 + s - p, y1 + s - p);
-        this.ctx.lineTo(x1 + s - p - c, y1 + s - p);
-        this.ctx.moveTo(x1 + p + c, y1 + s - p);
-        this.ctx.lineTo(x1 + p, y1 + s - p);
-        this.ctx.lineTo(x1 + p, y1 + s - p - c);
-        this.ctx.stroke();
-
-        this.ctx.fillStyle = COLORS.text;
+        ctx.fillStyle = COLORS.pauseBtn;
+        ctx.fillRect(x1, y2, s, s);
+        ctx.fillStyle = COLORS.text;
         const bw = s * 0.2;
         const bh = s * 0.5;
         const gap = s * 0.15;
-        this.ctx.fillRect(x1 + s / 2 - gap - bw, y2 + s / 4, bw, bh);
-        this.ctx.fillRect(x1 + s / 2 + gap, y2 + s / 4, bw, bh);
+        ctx.fillRect(x1 + s / 2 - gap - bw, y2 + s / 4, bw, bh);
+        ctx.fillRect(x1 + s / 2 + gap, y2 + s / 4, bw, bh);
     },
 
     drawOverlay(main, sub, showHome, overlayColor) {
-        this.ctx.fillStyle = overlayColor || COLORS.overlay;
-        this.ctx.fillRect(0, 0, this.world.w, this.world.h);
-        this.ctx.fillStyle = COLORS.text;
-        this.ctx.textAlign = "center";
-        const titleSize = Math.max(
-            24,
-            Math.min(this.world.w, this.world.h) * 0.08,
-        );
-        this.ctx.font = `${titleSize}px "Pixelify Local"`;
-        this.ctx.fillText(main, this.world.w / 2, this.world.h / 2);
+        const ctx = this.ctx;
+        const { w, h, scale } = this.world;
+        const dim = min(w, h);
+
+        ctx.fillStyle = overlayColor || COLORS.overlay;
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = COLORS.text;
+        ctx.textAlign = "center";
+        ctx.font = font(max(24, dim * 0.08));
+        ctx.fillText(main, w / 2, h / 2);
 
         if (sub) {
-            const subSize = Math.max(
-                14,
-                Math.min(this.world.w, this.world.h) * 0.04,
-            );
-            this.ctx.font = `${subSize}px "Pixelify Local"`;
-            this.ctx.fillText(
-                sub,
-                this.world.w / 2,
-                this.world.h / 2 + this.world.scale * 1.5,
-            );
+            ctx.font = font(max(14, dim * 0.04));
+            ctx.fillText(sub, w / 2, h / 2 + scale * 1.5);
         }
 
         if (showHome) {
-            const btnW = this.world.scale * 3;
-            const btnH = this.world.scale * 0.9;
-            const btnX = this.world.w / 2 - btnW / 2;
-            const btnY = this.world.h / 2 + this.world.scale * 2.5;
-            this.ctx.fillStyle = COLORS.pauseBtn;
-            this.ctx.fillRect(btnX, btnY, btnW, btnH);
-            this.ctx.fillStyle = COLORS.text;
-            this.ctx.font = `${this.world.scale * 0.6}px "Pixelify Local"`;
-            this.ctx.fillText(
-                "HOME",
-                this.world.w / 2,
-                this.world.h / 2 + this.world.scale * 3.15,
-            );
+            const btnW = scale * 3;
+            const btnH = scale * 0.9;
+            const btnX = w / 2 - btnW / 2;
+            const btnY = h / 2 + scale * 2.5;
+            ctx.fillStyle = COLORS.pauseBtn;
+            ctx.fillRect(btnX, btnY, btnW, btnH);
+            ctx.fillStyle = COLORS.text;
+            ctx.font = font(scale * 0.6);
+            ctx.fillText("HOME", w / 2, h / 2 + scale * 3.15);
         }
     },
 
+    drawMap() {
+        const { scale, ox, oy } = this.world;
+        const pxW = round(Map.width * scale);
+        const pxH = round(Map.height * scale);
+        if (Map.cache)
+            this.ctx.drawImage(
+                Map.cache,
+                round(ox - pxW / 2),
+                round(oy - pxH / 2),
+                pxW,
+                pxH,
+            );
+    },
+
     draw() {
-        this.ctx.imageSmoothingEnabled = false;
+        const ctx = this.ctx;
+        const state = this.state;
+        const { w, h, scale } = this.world;
+        const cx = w / 2;
+        const cy = h / 2;
+        ctx.imageSmoothingEnabled = false;
 
-        if (Map.waterCache) {
-            this.ctx.drawImage(Map.waterCache, 0, 0);
-        }
+        if (Map.waterCache) ctx.drawImage(Map.waterCache, 0, 0);
 
-        if (this.state === "MENU") {
-            const pxW = Math.round(Map.width * this.world.scale);
-            const pxH = Math.round(Map.height * this.world.scale);
-            const mx = Math.round(this.world.ox - pxW / 2);
-            const my = Math.round(this.world.oy - pxH / 2);
+        this.drawMap();
 
-            if (Map.cache) this.ctx.drawImage(Map.cache, mx, my, pxW, pxH);
-
+        if (state === "MENU") {
             this.drawOverlay("Recoil Island", null);
 
-            this.ctx.fillStyle = COLORS.text;
-            const tipSize = Math.max(
-                14,
-                Math.min(this.world.w, this.world.h) * 0.04,
-            );
-            this.ctx.font = `${tipSize}px "Pixelify Local"`;
-            this.ctx.textAlign = "center";
-            const tipY = this.world.h / 2 + tipSize * 3;
-            this.ctx.fillText("click to start", this.world.w / 2, tipY);
-            this.ctx.fillText(
-                "use landscape mode",
-                this.world.w / 2,
-                tipY + tipSize * 1.3,
-            );
-            this.ctx.fillText(
-                "and enable fullscreen",
-                this.world.w / 2,
-                tipY + tipSize * 2.6,
-            );
+            const dim = min(w, h);
+            const tipSize = max(14, dim * 0.04);
+            const tipY = cy + tipSize * 3;
 
-            const s = CFG.pauseSize;
-            const m = CFG.pauseMargin;
-            this.ctx.fillStyle = COLORS.pauseBtn;
-            this.ctx.fillRect(this.world.w - s - m, m, s, s);
-            this.ctx.strokeStyle = COLORS.text;
-            this.ctx.lineWidth = 2;
-            const p = s * 0.25;
-            const c = s * 0.3;
-            const x1 = this.world.w - s - m;
-            const y1 = m;
-            this.ctx.beginPath();
-            this.ctx.moveTo(x1 + p, y1 + p + c);
-            this.ctx.lineTo(x1 + p, y1 + p);
-            this.ctx.lineTo(x1 + p + c, y1 + p);
-            this.ctx.moveTo(x1 + s - p - c, y1 + p);
-            this.ctx.lineTo(x1 + s - p, y1 + p);
-            this.ctx.lineTo(x1 + s - p, y1 + p + c);
-            this.ctx.moveTo(x1 + s - p, y1 + s - p - c);
-            this.ctx.lineTo(x1 + s - p, y1 + s - p);
-            this.ctx.lineTo(x1 + s - p - c, y1 + s - p);
-            this.ctx.moveTo(x1 + p + c, y1 + s - p);
-            this.ctx.lineTo(x1 + p, y1 + s - p);
-            this.ctx.lineTo(x1 + p, y1 + s - p - c);
-            this.ctx.stroke();
+            ctx.fillStyle = COLORS.text;
+            ctx.font = font(tipSize);
+            ctx.textAlign = "center";
+            ctx.fillText("click to start", cx, tipY);
+            ctx.fillText("use landscape mode", cx, tipY + tipSize * 1.3);
+            ctx.fillText("and enable fullscreen", cx, tipY + tipSize * 2.6);
+
+            this.drawFullscreenIcon(
+                w - CFG.pauseSize - CFG.pauseMargin,
+                CFG.pauseMargin,
+                CFG.pauseSize,
+            );
             return;
         }
 
-        const pxW = Math.round(Map.width * this.world.scale);
-        const pxH = Math.round(Map.height * this.world.scale);
-        const mx = Math.round(this.world.ox - pxW / 2);
-        const my = Math.round(this.world.oy - pxH / 2);
-
-        if (Map.cache) this.ctx.drawImage(Map.cache, mx, my, pxW, pxH);
-
-        if (this.state !== "READY") {
-            this.enemies.forEach((enemy) => this.drawEntity(enemy, false));
-            if (this.state !== "LOST") this.drawEntity(this.player, true);
+        if (state !== "READY") {
+            const enemies = this.enemies;
+            for (let i = 0; i < enemies.length; i++)
+                this.drawEntity(enemies[i], false);
+            if (state !== "LOST") this.drawEntity(this.player, true);
         }
 
-        this.bullets.forEach((bullet) => this.drawBullet(bullet));
+        const bullets = this.bullets;
+        for (let i = 0; i < bullets.length; i++) this.drawBullet(bullets[i]);
 
-        if (["PLAYING", "COUNTDOWN", "READY", "PAUSED"].includes(this.state)) {
-            this.ctx.fillStyle = COLORS.text;
-            this.ctx.font = `${Math.max(16, this.world.scale * 0.6)}px "Pixelify Local"`;
-            this.ctx.textAlign = "left";
-            this.ctx.fillText(`LEVEL: ${this.level}`, 20, 40);
-            this.ctx.fillText(`BEST: ${this.best}`, 20, 70);
+        if (
+            state === "PLAYING" ||
+            state === "COUNTDOWN" ||
+            state === "READY" ||
+            state === "PAUSED"
+        ) {
+            ctx.fillStyle = COLORS.text;
+            ctx.font = font(max(16, scale * 0.6));
+            ctx.textAlign = "left";
+            ctx.fillText(`LEVEL: ${this.level}`, 20, 40);
+            ctx.fillText(`BEST: ${this.best}`, 20, 70);
             this.drawUI();
         }
 
-        if (this.state === "LOST")
+        if (state === "LOST")
             this.drawOverlay("GAME OVER", null, false, COLORS.overlayRed);
-        else if (this.state === "COUNTDOWN")
+        else if (state === "COUNTDOWN")
             this.drawOverlay(
                 "LEVEL COMPLETE",
                 null,
                 false,
                 COLORS.overlayGreen,
             );
-        else if (this.state === "READY")
+        else if (state === "READY")
             this.drawOverlay(`LEVEL ${this.level}`, "CLICK TO START");
-        else if (this.state === "PAUSED")
+        else if (state === "PAUSED")
             this.drawOverlay("PAUSED", "CLICK TO RESUME", true);
     },
 };
 
 // ================================= MAIN LOOP =================================
-
 const loop = (t) => {
     const now = t / 1000;
-    const dt = Math.min((t - Game.lastTime) / 1000, CFG.maxDt);
+    const dt = min((t - Game.lastTime) / 1000, CFG.maxDt);
     Game.lastTime = t;
 
     Game.update(dt, now);
@@ -1009,7 +970,6 @@ const loop = (t) => {
 };
 
 // =============================== INITIALIZATION ===============================
-
 (async () => {
     await Assets.load();
     await Map.load();
