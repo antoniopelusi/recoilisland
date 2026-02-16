@@ -976,12 +976,10 @@ const loop = (t) => {
     Game.init();
 
     if ("serviceWorker" in navigator) {
-        window.addEventListener("load", () => {
-            navigator.serviceWorker
-                .register("service-worker.js")
-                .then((reg) => console.log("SW ready:", reg.scope))
-                .catch((err) => console.error("SW not ready:", err));
-        });
+        const basePath = window.location.pathname.replace(/\/[^/]*$/, "/");
+        const swPath = basePath + "service-worker.js";
+
+        navigator.serviceWorker.register(swPath);
     }
 
     requestAnimationFrame(loop);
