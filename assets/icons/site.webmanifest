@@ -1,8 +1,8 @@
 {
   "name": "Recoil Island",
   "short_name": "Recoil Island",
-  "start_url": "",
-  "scope": "",
+  "start_url": "./index.html",
+  "scope": "./",
   "icons": [
     {
       "src": "web-app-manifest-192x192.png",
