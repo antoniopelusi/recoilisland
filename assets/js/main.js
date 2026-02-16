@@ -974,5 +974,12 @@ const loop = (t) => {
     await Assets.load();
     await Map.load();
     Game.init();
+
+    if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+            navigator.serviceWorker.register("../../service-worker.js");
+        });
+    }
+
     requestAnimationFrame(loop);
 })();
