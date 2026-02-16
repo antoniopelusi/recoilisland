@@ -43,7 +43,7 @@ const urlsToCache = [
     "assets/icons/favicon-96x96.png",
     "assets/icons/web-app-manifest-192x192.png",
     "assets/icons/web-app-manifest-512x512.png",
-    "manifest.json",
+    "site.webmanifest",
 ];
 
 self.addEventListener("install", (event) => {
