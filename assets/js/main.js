@@ -105,22 +105,22 @@ const Assets = {
                 "blood",
                 "player",
                 "enemy",
-            ].map((n) => loadImg(`assets/img/${n}.png`)),
+            ].map((n) => loadImg(`./assets/img/${n}.png`)),
         );
 
         this.obstacles = await Promise.all(
             Array.from({ length: 9 }, (_, i) =>
-                loadImg(`assets/img/obstacle${i + 1}.png`),
+                loadImg(`./assets/img/obstacle${i + 1}.png`),
             ),
         );
 
         const sfx = this.sfx;
-        sfx.death = new Audio("assets/fx/death.wav");
-        sfx.startlevel = new Audio("assets/fx/startlevel.wav");
-        sfx.action = new Audio("assets/fx/action.wav");
+        sfx.death = new Audio("./assets/fx/death.wav");
+        sfx.startlevel = new Audio("./assets/fx/startlevel.wav");
+        sfx.action = new Audio("./assets/fx/action.wav");
 
         for (let i = 0; i < 3; i++) {
-            const audio = new Audio("assets/fx/shot.wav");
+            const audio = new Audio("./assets/fx/shot.wav");
             audio.load();
             sfx.shotPool.push(audio);
         }
@@ -169,7 +169,7 @@ const Map = {
     async load(mapNum = null) {
         if (mapNum === null) mapNum = (random() * 10) | 0;
         this.currentMapNum = mapNum;
-        const res = await fetch(`assets/maps/map${mapNum}.json`);
+        const res = await fetch(`./assets/maps/map${mapNum}.json`);
         this.data = (await res.json()).map;
         this.cache = null;
         this.waterCache = null;
