@@ -1,4 +1,0 @@
-Site: antoniopelusi.github.io/recoil-island/
-Developer: Antonio Pelusi
-Email: antoniopelusi2000@gmail.com
-Languages: HTML, CSS, JS
